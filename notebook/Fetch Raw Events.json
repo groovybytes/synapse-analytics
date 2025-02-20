@@ -21,7 +21,7 @@
 				"spark.dynamicAllocation.enabled": "false",
 				"spark.dynamicAllocation.minExecutors": "2",
 				"spark.dynamicAllocation.maxExecutors": "2",
-				"spark.autotune.trackingId": "02e48cef-e02d-41ae-b6a2-9df96f34c437"
+				"spark.autotune.trackingId": "c33f622c-b840-4971-9a52-aede8914325e"
 			}
 		},
 		"metadata": {
@@ -45,8 +45,8 @@
 				},
 				"sparkVersion": "3.4",
 				"nodeCount": 3,
-				"cores": 8,
-				"memory": 56,
+				"cores": 4,
+				"memory": 28,
 				"automaticScaleJobs": false
 			},
 			"sessionKeepAliveTimeout": 30,
@@ -81,15 +81,18 @@
 					"# Create a new column 'BodyStr' with the decoded string\n",
 					"df_with_body = df.withColumn(\"BodyStr\", decode_udf(col(\"Body\")))\n",
 					"\n",
-					"# For demonstration, assume that the decoded 'BodyStr' is a JSON string containing a temperature reading.\n",
-					"# Define the JSON schema: adjust as needed if your JSON structure is different.\n",
+					"# Assume that the decoded 'BodyStr' is a JSON string containing a temperature reading.\n",
+					"# Define the JSON schema for the temperature reading.\n",
 					"body_schema = StructType().add(\"temperature\", DoubleType())\n",
 					"\n",
-					"# Parse the JSON from 'BodyStr' into a structured column named 'parsed'\n",
+					"# Parse the JSON from 'BodyStr' into a structured column named 'parsed'.\n",
 					"df_parsed = df_with_body.withColumn(\"parsed\", from_json(col(\"BodyStr\"), body_schema))\n",
 					"\n",
+					"# Filter out records where the JSON parsing failed (i.e. 'parsed' is null)\n",
+					"df_valid = df_parsed.filter(col(\"parsed\").isNotNull())\n",
+					"\n",
 					"# Select relevant columns and extract the temperature reading from the parsed JSON\n",
-					"df_extracted = df_parsed.select(\n",
+					"df_extracted = df_valid.select(\n",
 					"    col(\"SequenceNumber\"),\n",
 					"    col(\"EnqueuedTimeUtc\"),\n",
 					"    col(\"parsed.temperature\").alias(\"temperature\")\n",
@@ -99,7 +102,7 @@
 					"# Adjust the format if your timestamp string is in a different format.\n",
 					"df_with_timestamp = df_extracted.withColumn(\"eventTimestamp\", to_timestamp(col(\"EnqueuedTimeUtc\")))\n",
 					"\n",
-					"# For example, aggregate to compute the average temperature per one-minute window.\n",
+					"# Aggregate to compute the average temperature per one-minute window.\n",
 					"df_agg = df_with_timestamp.groupBy(\n",
 					"    window(col(\"eventTimestamp\"), \"1 minute\")\n",
 					").agg(\n",
@@ -113,7 +116,7 @@
 					"# df_agg.write.format(\"parquet\").mode(\"overwrite\").save(\"abfss://<container>@<storageaccount>.dfs.core.windows.net/path/to/output-folder\")\n",
 					""
 				],
-				"execution_count": null
+				"execution_count": 3
 			}
 		]
 	}
