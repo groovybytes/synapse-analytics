@@ -1,0 +1,120 @@
+{
+	"name": "Fetch Raw Events",
+	"properties": {
+		"nbformat": 4,
+		"nbformat_minor": 2,
+		"bigDataPool": {
+			"referenceName": "gbsparkpool",
+			"type": "BigDataPoolReference"
+		},
+		"targetSparkConfiguration": {
+			"referenceName": "Basic Spark Config",
+			"type": "SparkConfigurationReference"
+		},
+		"sessionProperties": {
+			"driverMemory": "28g",
+			"driverCores": 4,
+			"executorMemory": "28g",
+			"executorCores": 4,
+			"numExecutors": 2,
+			"conf": {
+				"spark.dynamicAllocation.enabled": "false",
+				"spark.dynamicAllocation.minExecutors": "2",
+				"spark.dynamicAllocation.maxExecutors": "2",
+				"spark.autotune.trackingId": "02e48cef-e02d-41ae-b6a2-9df96f34c437"
+			}
+		},
+		"metadata": {
+			"saveOutput": true,
+			"enableDebugMode": false,
+			"kernelspec": {
+				"name": "synapse_pyspark",
+				"display_name": "Synapse PySpark"
+			},
+			"language_info": {
+				"name": "python"
+			},
+			"a365ComputeOptions": {
+				"id": "/subscriptions/fa500dcb-57c7-43b4-a5a6-2d4f602c6bbb/resourceGroups/rg-groovybytes-capstone/providers/Microsoft.Synapse/workspaces/groovybytes-synapse-analytics/bigDataPools/gbsparkpool",
+				"name": "gbsparkpool",
+				"type": "Spark",
+				"endpoint": "https://groovybytes-synapse-analytics.dev.azuresynapse.net/livyApi/versions/2019-11-01-preview/sparkPools/gbsparkpool",
+				"auth": {
+					"type": "AAD",
+					"authResource": "https://dev.azuresynapse.net"
+				},
+				"sparkVersion": "3.4",
+				"nodeCount": 3,
+				"cores": 8,
+				"memory": 56,
+				"automaticScaleJobs": false
+			},
+			"sessionKeepAliveTimeout": 30,
+			"targetSparkConfiguration": "Basic Spark Config"
+		},
+		"cells": [
+			{
+				"cell_type": "code",
+				"source": [
+					"from pyspark.sql import SparkSession\n",
+					"from pyspark.sql.functions import col, udf, from_json, to_timestamp, window, avg\n",
+					"from pyspark.sql.types import StringType, StructType, DoubleType\n",
+					"\n",
+					"# Create or get the Spark session\n",
+					"spark = SparkSession.builder.getOrCreate()\n",
+					"\n",
+					"# Define the path to your Avro file in the Data Lake\n",
+					"avro_path = \"abfss://raw@groovybytesdatalake.dfs.core.windows.net/groovybytes-eventhub-namespaces/**\"\n",
+					"\n",
+					"# Read the Avro file using Spark's native Avro support\n",
+					"df = spark.read.format(\"avro\").load(avro_path)\n",
+					"\n",
+					"# Print the schema to verify that the data is read correctly\n",
+					"df.printSchema()\n",
+					"\n",
+					"# UDF to decode the binary 'Body' field to a UTF-8 string (if not null)\n",
+					"def decode_bytes(binary):\n",
+					"    return binary.decode(\"utf-8\") if binary is not None else None\n",
+					"\n",
+					"decode_udf = udf(decode_bytes, StringType())\n",
+					"\n",
+					"# Create a new column 'BodyStr' with the decoded string\n",
+					"df_with_body = df.withColumn(\"BodyStr\", decode_udf(col(\"Body\")))\n",
+					"\n",
+					"# For demonstration, assume that the decoded 'BodyStr' is a JSON string containing a temperature reading.\n",
+					"# Define the JSON schema: adjust as needed if your JSON structure is different.\n",
+					"body_schema = StructType().add(\"temperature\", DoubleType())\n",
+					"\n",
+					"# Parse the JSON from 'BodyStr' into a structured column named 'parsed'\n",
+					"df_parsed = df_with_body.withColumn(\"parsed\", from_json(col(\"BodyStr\"), body_schema))\n",
+					"\n",
+					"# Select relevant columns and extract the temperature reading from the parsed JSON\n",
+					"df_extracted = df_parsed.select(\n",
+					"    col(\"SequenceNumber\"),\n",
+					"    col(\"EnqueuedTimeUtc\"),\n",
+					"    col(\"parsed.temperature\").alias(\"temperature\")\n",
+					")\n",
+					"\n",
+					"# Convert the EnqueuedTimeUtc string to a Spark timestamp.\n",
+					"# Adjust the format if your timestamp string is in a different format.\n",
+					"df_with_timestamp = df_extracted.withColumn(\"eventTimestamp\", to_timestamp(col(\"EnqueuedTimeUtc\")))\n",
+					"\n",
+					"# For example, aggregate to compute the average temperature per one-minute window.\n",
+					"df_agg = df_with_timestamp.groupBy(\n",
+					"    window(col(\"eventTimestamp\"), \"1 minute\")\n",
+					").agg(\n",
+					"    avg(col(\"temperature\")).alias(\"avg_temperature\")\n",
+					")\n",
+					"\n",
+					"# Show the aggregated results\n",
+					"df_agg.show(truncate=False)\n",
+					"\n",
+					"# Optionally, write out the aggregated data to a storage location for further analysis\n",
+					"# df_agg.write.format(\"parquet\").mode(\"overwrite\").save(\"abfss://<container>@<storageaccount>.dfs.core.windows.net/path/to/output-folder\")\n",
+					""
+				],
+				"execution_count": null
+			}
+		]
+	}
+}
