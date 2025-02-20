@@ -1,0 +1,15 @@
+{
+	"name": "Basic Spark Config",
+	"properties": {
+		"description": "Set a max core count of 12",
+		"configs": {
+			"spark.cores.max": "12"
+		},
+		"created": "2025-02-20T02:05:41.0200000-05:00",
+		"createdBy": "hey@okikio.dev",
+		"annotations": [],
+		"configMergeRule": {
+			"artifact.currentOperation.spark.cores.max": "replace"
+		}
+	}
+}
