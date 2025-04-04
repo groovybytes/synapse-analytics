@@ -3,17 +3,21 @@
 	"properties": {
 		"nbformat": 4,
 		"nbformat_minor": 2,
+		"bigDataPool": {
+			"referenceName": "gbsparkpool",
+			"type": "BigDataPoolReference"
+		},
 		"sessionProperties": {
-			"driverMemory": "28g",
-			"driverCores": 4,
-			"executorMemory": "28g",
-			"executorCores": 4,
+			"driverMemory": "56g",
+			"driverCores": 8,
+			"executorMemory": "56g",
+			"executorCores": 8,
 			"numExecutors": 2,
 			"conf": {
 				"spark.dynamicAllocation.enabled": "false",
 				"spark.dynamicAllocation.minExecutors": "2",
 				"spark.dynamicAllocation.maxExecutors": "2",
-				"spark.autotune.trackingId": "4eceb332-38dc-487d-afa9-f0541c7b5a3b"
+				"spark.autotune.trackingId": "e8a8dca4-5966-4c7a-a773-21b7bb699e92"
 			}
 		},
 		"metadata": {
@@ -21,10 +25,25 @@
 			"enableDebugMode": false,
 			"kernelspec": {
 				"name": "synapse_pyspark",
-				"display_name": "python"
+				"display_name": "Synapse PySpark"
 			},
 			"language_info": {
 				"name": "python"
+			},
+			"a365ComputeOptions": {
+				"id": "/subscriptions/0d7d68b3-a011-48c6-8d4d-9b0f8bb9087a/resourceGroups/rg-groovybytes-analytics/providers/Microsoft.Synapse/workspaces/groovybytes-batch-analysis/bigDataPools/gbsparkpool",
+				"name": "gbsparkpool",
+				"type": "Spark",
+				"endpoint": "https://groovybytes-batch-analysis.dev.azuresynapse.net/livyApi/versions/2019-11-01-preview/sparkPools/gbsparkpool",
+				"auth": {
+					"type": "AAD",
+					"authResource": "https://dev.azuresynapse.net"
+				},
+				"sparkVersion": "3.4",
+				"nodeCount": 3,
+				"cores": 8,
+				"memory": 56,
+				"automaticScaleJobs": false
 			},
 			"sessionKeepAliveTimeout": 30
 		},
