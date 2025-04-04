@@ -13,7 +13,7 @@
 				"spark.dynamicAllocation.enabled": "false",
 				"spark.dynamicAllocation.minExecutors": "2",
 				"spark.dynamicAllocation.maxExecutors": "2",
-				"spark.autotune.trackingId": "f83be7b0-d96b-4416-8f27-54c38c26191f"
+				"spark.autotune.trackingId": "4eceb332-38dc-487d-afa9-f0541c7b5a3b"
 			}
 		},
 		"metadata": {
@@ -46,6 +46,140 @@
 				"source": [
 					"# Initialize Spark Session\n",
 					"spark = SparkSession.builder.appName(\"Energy Consumption Analysis\").getOrCreate()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Read enriched device data from Cosmos DB\n",
+					"enriched_data = spark.read.format(\"cosmos.olap\") \\\n",
+					"    .option(\"spark.synapse.linkedService\", \"CosmosDBLSproject-capstone\") \\\n",
+					"    .option(\"spark.cosmos.container\", \"enriched\") \\\n",
+					"    .load()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Filter for device data related to energy consumption\n",
+					"energy_data = enriched_data.filter(\n",
+					"    (col(\"entityType\") == \"device_data\") & \n",
+					"    (col(\"attributes.sensor.value\").isin(\"Temperature\", \"Energy\", \"Power\", \"Electricity\", \"HVAC\"))\n",
+					")\n",
+					""
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Perform time-based aggregation\n",
+					"hourly_energy = energy_data \\\n",
+					"    .withColumn(\"timestamp\", col(\"attributes.timestamp.value\").cast(\"timestamp\")) \\\n",
+					"    .groupBy(\n",
+					"        window(col(\"timestamp\"), \"1 hour\"),\n",
+					"        col(\"metadata.location\")\n",
+					"    ) \\\n",
+					"    .agg(\n",
+					"        avg(col(\"attributes.measurement.value\")).alias(\"avg_consumption\"),\n",
+					"        max(col(\"attributes.measurement.value\")).alias(\"max_consumption\"),\n",
+					"        min(col(\"attributes.measurement.value\")).alias(\"min_consumption\")\n",
+					"    ) \\\n",
+					"    .withColumn(\"window_start\", col(\"window.start\")) \\\n",
+					"    .withColumn(\"window_end\", col(\"window.end\")) \\\n",
+					"    .drop(\"window\")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Calculate daily patterns\n",
+					"daily_pattern = energy_data \\\n",
+					"    .withColumn(\"timestamp\", col(\"attributes.timestamp.value\").cast(\"timestamp\")) \\\n",
+					"    .withColumn(\"hour_of_day\", hour(col(\"timestamp\"))) \\\n",
+					"    .groupBy(\"hour_of_day\") \\\n",
+					"    .agg(avg(col(\"attributes.measurement.value\")).alias(\"avg_consumption\")) \\\n",
+					"    .orderBy(\"hour_of_day\")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Prepare output in the required ProcessedData format\n",
+					"now = datetime.now().isoformat()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# For hourly data\n",
+					"hourly_results = hourly_energy.select(\n",
+					"    \"window_start\", \"window_end\", \"location\", \"avg_consumption\", \"max_consumption\", \"min_consumption\"\n",
+					").collect()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# For daily pattern\n",
+					"daily_pattern_results = daily_pattern.select(\"hour_of_day\", \"avg_consumption\").collect()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Create processed data in the required format\n",
+					"processed_data = {\n",
+					"    \"id\": str(uuid.uuid4()),\n",
+					"    \"projectId\": \"project-capstone\",\n",
+					"    \"sourceIds\": energy_data.select(\"id\").distinct().limit(100).rdd.flatMap(lambda x: x).collect(),\n",
+					"    \"analysisType\": \"pattern\",\n",
+					"    \"title\": \"Energy Consumption Trends\",\n",
+					"    \"description\": \"Analysis of energy consumption patterns over time\",\n",
+					"    \"data\": {\n",
+					"        \"type\": \"energy_consumption\",\n",
+					"        \"value\": {\n",
+					"            \"hourly_trends\": [{\"timestamp\": str(row.window_start), \"location\": row.location, \"avg_consumption\": row.avg_consumption} for row in hourly_results],\n",
+					"            \"daily_patterns\": [{\"hour\": row.hour_of_day, \"avg_consumption\": row.avg_consumption} for row in daily_pattern_results]\n",
+					"        },\n",
+					"        \"confidence\": 0.95\n",
+					"    },\n",
+					"    \"insights\": [\n",
+					"        {\n",
+					"            \"type\": \"cost_reduction\",\n",
+					"            \"title\": \"Peak Usage Hours Identified\",\n",
+					"            \"description\": f\"Peak energy usage occurs at {daily_pattern.orderBy(col('avg_consumption').desc()).first().hour_of_day}:00, suggesting potential for off-peak scheduling\",\n",
+					"            \"impact\": 350,\n",
+					"            \"confidence\": 0.9\n",
+					"        }\n",
+					"    ],\n",
+					"    \"visualizationType\": \"chart\",\n",
+					"    \"visualizationConfig\": {\n",
+					"        \"chartType\": \"line\",\n",
+					"        \"xAxis\": \"timestamp\",\n",
+					"        \"yAxis\": \"consumption\"\n",
+					"    },\n",
+					"    \"processedAt\": now,\n",
+					"    \"createdAt\": now\n",
+					"}"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Save to Data Lake\n",
+					"processedDF = spark.createDataFrame([processed_data])\n",
+					"processedDF.write.format(\"parquet\").mode(\"append\").save(\"abfss://processed@groovybytesdatalake.dfs.core.windows.net/energy_consumption/\")\n",
+					"\n",
+					"print(\"Energy consumption analysis completed and saved to Data Lake\")"
 				],
 				"execution_count": null
 			}
