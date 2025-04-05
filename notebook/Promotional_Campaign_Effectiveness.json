@@ -1,0 +1,393 @@
+{
+	"name": "Promotional_Campaign_Effectiveness",
+	"properties": {
+		"nbformat": 4,
+		"nbformat_minor": 2,
+		"sessionProperties": {
+			"driverMemory": "28g",
+			"driverCores": 4,
+			"executorMemory": "28g",
+			"executorCores": 4,
+			"numExecutors": 2,
+			"conf": {
+				"spark.dynamicAllocation.enabled": "false",
+				"spark.dynamicAllocation.minExecutors": "2",
+				"spark.dynamicAllocation.maxExecutors": "2",
+				"spark.autotune.trackingId": "4cd893d9-c64a-458b-b00f-eea5874e8f93"
+			}
+		},
+		"metadata": {
+			"saveOutput": true,
+			"enableDebugMode": false,
+			"kernelspec": {
+				"name": "synapse_pyspark",
+				"display_name": "python"
+			},
+			"language_info": {
+				"name": "python"
+			},
+			"sessionKeepAliveTimeout": 30
+		},
+		"cells": [
+			{
+				"cell_type": "code",
+				"source": [
+					"# Import necessary libraries\n",
+					"from pyspark.sql import SparkSession\n",
+					"from pyspark.sql.functions import col, expr, to_date, date_format, datediff, sum, avg, count\n",
+					"import uuid\n",
+					"from datetime import datetime"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Initialize Spark Session\n",
+					"spark = SparkSession.builder.appName(\"Promotional Campaign Effectiveness\").getOrCreate()\n",
+					""
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Read enriched data from Cosmos DB\n",
+					"enriched_data = spark.read.format(\"cosmos.olap\") \\\n",
+					"    .option(\"spark.synapse.linkedService\", \"CosmosDBLSproject-capstone\") \\\n",
+					"    .option(\"spark.cosmos.container\", \"enriched\") \\\n",
+					"    .load()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# For this demo, we'll create synthetic campaign data\n",
+					"# Define campaign periods\n",
+					"today = datetime.now()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"campaign_data = spark.createDataFrame([\n",
+					"    (\"Spring Sale\", (today - timedelta(days=60)).strftime(\"%Y-%m-%d\"), (today - timedelta(days=45)).strftime(\"%Y-%m-%d\"), \"Discount\", 15),\n",
+					"    (\"Summer Clearance\", (today - timedelta(days=30)).strftime(\"%Y-%m-%d\"), (today - timedelta(days=15)).strftime(\"%Y-%m-%d\"), \"BOGO\", None),\n",
+					"    (\"Back to School\", (today - timedelta(days=14)).strftime(\"%Y-%m-%d\"), today.strftime(\"%Y-%m-%d\"), \"Bundle\", None)\n",
+					"], [\"campaign_name\", \"start_date\", \"end_date\", \"promotion_type\", \"discount_percentage\"])"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Get foot traffic data or create synthetic data\n",
+					"traffic_data = enriched_data.filter(\n",
+					"    (col(\"entityType\") == \"device_data\") & \n",
+					"    (col(\"attributes.sensor.value\").isin(\"Motion\", \"Proximity\", \"Count\", \"Traffic\"))\n",
+					")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"if traffic_data.count() > 0:\n",
+					"    traffic_by_date = traffic_data \\\n",
+					"        .withColumn(\"date\", date_format(col(\"attributes.timestamp.value\").cast(\"timestamp\"), \"yyyy-MM-dd\")) \\\n",
+					"        .withColumn(\"count\", col(\"attributes.measurement.value\").cast(\"double\")) \\\n",
+					"        .groupBy(\"date\") \\\n",
+					"        .agg(sum(\"count\").alias(\"daily_traffic\"))\n",
+					"else:\n",
+					"    # Create synthetic traffic data\n",
+					"    date_range = [(today - timedelta(days=i)).strftime(\"%Y-%m-%d\") for i in range(70, 0, -1)]\n",
+					"    \n",
+					"    # Create base traffic with weekend peaks\n",
+					"    base_traffic = []\n",
+					"    for i, date in enumerate(date_range):\n",
+					"        # Higher traffic on weekends (i % 7 == 5 or i % 7 == 6)\n",
+					"        weekend_factor = 1.4 if i % 7 >= 5 else 1.0\n",
+					"        # Add some randomness\n",
+					"        random_factor = 0.8 + (i % 10) / 10\n",
+					"        base_traffic.append((date, int(300 * weekend_factor * random_factor)))\n",
+					"    \n",
+					"    traffic_by_date = spark.createDataFrame(base_traffic, [\"date\", \"daily_traffic\"])"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Get sales data or create synthetic data\n",
+					"sales_data = enriched_data.filter(\n",
+					"    (col(\"entityType\") == \"financial_record\") & \n",
+					"    (col(\"attributes.revenue.value\").isNotNull())\n",
+					")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"if sales_data.count() > 0:\n",
+					"    sales_by_date = sales_data \\\n",
+					"        .withColumn(\"date\", date_format(col(\"attributes.date.value\").cast(\"timestamp\"), \"yyyy-MM-dd\")) \\\n",
+					"        .groupBy(\"date\") \\\n",
+					"        .agg(sum(\"attributes.revenue.value\").alias(\"daily_sales\"))\n",
+					"else:\n",
+					"    # Create synthetic sales data\n",
+					"    date_range = [(today - timedelta(days=i)).strftime(\"%Y-%m-%d\") for i in range(70, 0, -1)]\n",
+					"    \n",
+					"    # Create base sales with weekend peaks\n",
+					"    base_sales = []\n",
+					"    for i, date in enumerate(date_range):\n",
+					"        # Higher sales on weekends\n",
+					"        weekend_factor = 1.5 if i % 7 >= 5 else 1.0\n",
+					"        # Add some randomness\n",
+					"        random_factor = 0.85 + (i % 7) / 10\n",
+					"        base_sales.append((date, int(5000 * weekend_factor * random_factor)))\n",
+					"    \n",
+					"    sales_by_date = spark.createDataFrame(base_sales, [\"date\", \"daily_sales\"])"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Add campaign information to the sales and traffic data\n",
+					"from pyspark.sql.functions import when, broadcast"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Convert date strings to date objects for comparison\n",
+					"campaign_data = campaign_data \\\n",
+					"    .withColumn(\"start_date\", to_date(col(\"start_date\"))) \\\n",
+					"    .withColumn(\"end_date\", to_date(col(\"end_date\")))"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"sales_by_date = sales_by_date \\\n",
+					"    .withColumn(\"date\", to_date(col(\"date\")))"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"traffic_by_date = traffic_by_date \\\n",
+					"    .withColumn(\"date\", to_date(col(\"date\")))"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Join the data with broadcasting the smaller campaign dataset\n",
+					"campaign_augmented_data = sales_by_date.join(\n",
+					"    broadcast(traffic_by_date),\n",
+					"    \"date\",\n",
+					"    \"outer\"\n",
+					").na.fill(0)"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Add campaign flags\n",
+					"for row in campaign_data.collect():\n",
+					"    campaign_name = row.campaign_name\n",
+					"    start_date = row.start_date\n",
+					"    end_date = row.end_date\n",
+					"    \n",
+					"    # Add a flag for each campaign\n",
+					"    campaign_augmented_data = campaign_augmented_data.withColumn(\n",
+					"        f\"is_{campaign_name.replace(' ', '_').lower()}\",\n",
+					"        when((col(\"date\") >= start_date) & (col(\"date\") <= end_date), 1).otherwise(0)\n",
+					"    )"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Calculate baseline metrics\n",
+					"from pyspark.sql.window import Window\n",
+					"from pyspark.sql.functions import lag, lead"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Define a window spec for calculating baseline (pre-campaign)\n",
+					"date_window = Window.orderBy(\"date\")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Add columns for 7-day moving averages\n",
+					"campaign_augmented_data = campaign_augmented_data \\\n",
+					"    .withColumn(\"prev_7d_sales\", avg(\"daily_sales\").over(Window.orderBy(\"date\").rowsBetween(-7, -1))) \\\n",
+					"    .withColumn(\"prev_7d_traffic\", avg(\"daily_traffic\").over(Window.orderBy(\"date\").rowsBetween(-7, -1)))"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Calculate conversion rate and average ticket size\n",
+					"campaign_augmented_data = campaign_augmented_data \\\n",
+					"    .withColumn(\"conversion_rate\", expr(\"daily_sales / nullif(daily_traffic, 0)\")) \\\n",
+					"    .withColumn(\"prev_conversion_rate\", expr(\"prev_7d_sales / nullif(prev_7d_traffic, 0)\")) \\\n",
+					"    .na.fill(0)"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Calculate impact for each campaign\n",
+					"campaign_impacts = []"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"for row in campaign_data.collect():\n",
+					"    campaign_name = row.campaign_name\n",
+					"    campaign_col = f\"is_{campaign_name.replace(' ', '_').lower()}\"\n",
+					"    \n",
+					"    # Calculate average metrics during the campaign\n",
+					"    campaign_metrics = campaign_augmented_data \\\n",
+					"        .filter(col(campaign_col) == 1) \\\n",
+					"        .agg(\n",
+					"            avg(\"daily_sales\").alias(\"avg_sales\"),\n",
+					"            avg(\"daily_traffic\").alias(\"avg_traffic\"),\n",
+					"            avg(\"conversion_rate\").alias(\"avg_conversion\"),\n",
+					"            count(\"date\").alias(\"campaign_days\")\n",
+					"        ).collect()[0]\n",
+					"    \n",
+					"    # Get data for the period just before the campaign (equal to campaign duration)\n",
+					"    campaign_duration = int(campaign_metrics.campaign_days)\n",
+					"    \n",
+					"    # Get baseline metrics from before the campaign\n",
+					"    baseline_metrics = campaign_augmented_data \\\n",
+					"        .filter(col(\"date\") < row.start_date) \\\n",
+					"        .orderBy(col(\"date\").desc()) \\\n",
+					"        .limit(campaign_duration) \\\n",
+					"        .agg(\n",
+					"            avg(\"daily_sales\").alias(\"baseline_sales\"),\n",
+					"            avg(\"daily_traffic\").alias(\"baseline_traffic\"),\n",
+					"            avg(\"conversion_rate\").alias(\"baseline_conversion\")\n",
+					"        ).collect()[0]\n",
+					"    \n",
+					"    # Calculate impact\n",
+					"    sales_lift = (campaign_metrics.avg_sales / baseline_metrics.baseline_sales) - 1 if baseline_metrics.baseline_sales > 0 else 0\n",
+					"    traffic_lift = (campaign_metrics.avg_traffic / baseline_metrics.baseline_traffic) - 1 if baseline_metrics.baseline_traffic > 0 else 0\n",
+					"    conversion_lift = (campaign_metrics.avg_conversion / baseline_metrics.baseline_conversion) - 1 if baseline_metrics.baseline_conversion > 0 else 0\n",
+					"    \n",
+					"    impact = {\n",
+					"        \"campaign_name\": campaign_name,\n",
+					"        \"promotion_type\": row.promotion_type,\n",
+					"        \"discount_percentage\": row.discount_percentage,\n",
+					"        \"start_date\": row.start_date.strftime(\"%Y-%m-%d\"),\n",
+					"        \"end_date\": row.end_date.strftime(\"%Y-%m-%d\"),\n",
+					"        \"avg_daily_sales\": float(campaign_metrics.avg_sales),\n",
+					"        \"avg_daily_traffic\": float(campaign_metrics.avg_traffic),\n",
+					"        \"avg_conversion_rate\": float(campaign_metrics.avg_conversion),\n",
+					"        \"sales_lift_percentage\": float(sales_lift * 100),\n",
+					"        \"traffic_lift_percentage\": float(traffic_lift * 100),\n",
+					"        \"conversion_lift_percentage\": float(conversion_lift * 100),\n",
+					"        \"total_sales_impact\": float(campaign_metrics.avg_sales * campaign_metrics.campaign_days - \n",
+					"                                   baseline_metrics.baseline_sales * campaign_metrics.campaign_days)\n",
+					"    }\n",
+					"    \n",
+					"    campaign_impacts.append(impact)"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Prepare output in the required ProcessedData format\n",
+					"now = datetime.now().isoformat()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Create processed data in the required format\n",
+					"processed_data = {\n",
+					"    \"id\": str(uuid.uuid4()),\n",
+					"    \"projectId\": \"project-capstone\",\n",
+					"    \"sourceIds\": enriched_data.select(\"id\").distinct().limit(10).rdd.flatMap(lambda x: x).collect() or [\"sample-campaign-data\"],\n",
+					"    \"analysisType\": \"pattern\",\n",
+					"    \"title\": \"Promotional Campaign Effectiveness\",\n",
+					"    \"description\": \"Analysis of marketing campaign performance and impact on sales and traffic\",\n",
+					"    \"data\": {\n",
+					"        \"type\": \"campaign_effectiveness\",\n",
+					"        \"value\": {\n",
+					"            \"campaigns\": campaign_impacts,\n",
+					"            \"daily_metrics\": campaign_augmented_data.select(\n",
+					"                \"date\", \"daily_sales\", \"daily_traffic\", \"conversion_rate\",\n",
+					"                *[f\"is_{c.campaign_name.replace(' ', '_').lower()}\" for c in campaign_data.collect()]\n",
+					"            ).orderBy(\"date\").collect()\n",
+					"        },\n",
+					"        \"confidence\": 0.85\n",
+					"    },\n",
+					"    \"insights\": [\n",
+					"        {\n",
+					"            \"type\": \"revenue_increase\",\n",
+					"            \"title\": f\"Most Effective Campaign: {max(campaign_impacts, key=lambda x: x['sales_lift_percentage'])['campaign_name']}\",\n",
+					"            \"description\": f\"The {max(campaign_impacts, key=lambda x: x['sales_lift_percentage'])['campaign_name']} campaign showed the highest sales lift at {max(campaign_impacts, key=lambda x: x['sales_lift_percentage'])['sales_lift_percentage']:.1f}%\",\n",
+					"            \"impact\": max(campaign_impacts, key=lambda x: x['total_sales_impact'])['total_sales_impact'],\n",
+					"            \"confidence\": 0.8\n",
+					"        },\n",
+					"        {\n",
+					"            \"type\": \"operational_improvement\",\n",
+					"            \"title\": \"Traffic vs. Conversion Insights\",\n",
+					"            \"description\": f\"The {max(campaign_impacts, key=lambda x: x['conversion_lift_percentage'])['campaign_name']} campaign had the highest impact on conversion rates, suggesting effective targeting\",\n",
+					"            \"impact\": max(campaign_impacts, key=lambda x: x['conversion_lift_percentage'])['total_sales_impact'] * 0.6,\n",
+					"            \"confidence\": 0.75\n",
+					"        }\n",
+					"    ],\n",
+					"    \"visualizationType\": \"chart\",\n",
+					"    \"visualizationConfig\": {\n",
+					"        \"chartType\": [\"bar\", \"line\"],\n",
+					"        \"metrics\": [\"sales_lift_percentage\", \"traffic_lift_percentage\", \"conversion_lift_percentage\"],\n",
+					"        \"dimensions\": [\"campaign_name\", \"promotion_type\"]\n",
+					"    },\n",
+					"    \"processedAt\": now,\n",
+					"    \"createdAt\": now\n",
+					"}"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Save to Data Lake\n",
+					"processedDF = spark.createDataFrame([processed_data])\n",
+					"processedDF.write.format(\"parquet\").mode(\"append\").save(\"abfss://processed@groovybytesdatalake.dfs.core.windows.net/campaign_effectiveness/\")\n",
+					"\n",
+					"print(\"Promotional campaign effectiveness analysis completed and saved to Data Lake\")"
+				],
+				"execution_count": null
+			}
+		]
+	}
+}
