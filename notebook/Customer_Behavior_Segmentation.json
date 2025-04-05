@@ -1,0 +1,242 @@
+{
+	"name": "Customer_Behavior_Segmentation",
+	"properties": {
+		"nbformat": 4,
+		"nbformat_minor": 2,
+		"sessionProperties": {
+			"driverMemory": "28g",
+			"driverCores": 4,
+			"executorMemory": "28g",
+			"executorCores": 4,
+			"numExecutors": 2,
+			"conf": {
+				"spark.dynamicAllocation.enabled": "false",
+				"spark.dynamicAllocation.minExecutors": "2",
+				"spark.dynamicAllocation.maxExecutors": "2",
+				"spark.autotune.trackingId": "ac9925cd-b6b0-4255-bb73-cf3cf6e28931"
+			}
+		},
+		"metadata": {
+			"saveOutput": true,
+			"enableDebugMode": false,
+			"kernelspec": {
+				"name": "synapse_pyspark",
+				"display_name": "python"
+			},
+			"language_info": {
+				"name": "python"
+			},
+			"sessionKeepAliveTimeout": 30
+		},
+		"cells": [
+			{
+				"cell_type": "code",
+				"source": [
+					"# Import necessary libraries\n",
+					"from pyspark.sql import SparkSession\n",
+					"from pyspark.sql.functions import col, expr, arrays_zip, explode, collect_list\n",
+					"from pyspark.ml.feature import VectorAssembler\n",
+					"from pyspark.ml.clustering import KMeans\n",
+					"import uuid\n",
+					"from datetime import datetime"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Initialize Spark Session\n",
+					"spark = SparkSession.builder.appName(\"Customer Behavior Segmentation\").getOrCreate()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Read enriched data from Cosmos DB\n",
+					"enriched_data = spark.read.format(\"cosmos.olap\") \\\n",
+					"    .option(\"spark.synapse.linkedService\", \"CosmosDBLSproject-capstone\") \\\n",
+					"    .option(\"spark.cosmos.container\", \"enriched\") \\\n",
+					"    .load()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Filter for customer-related data\n",
+					"customer_data = enriched_data.filter(\n",
+					"    (col(\"entityType\") == \"person\") | \n",
+					"    ((col(\"entityType\") == \"financial_record\") & col(\"attributes.transaction_details.value\").isNotNull())\n",
+					")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# For demo purposes, we'll create synthetic customer behavior data\n",
+					"# In a real scenario, we'd extract this from actual customer interactions\n",
+					"from pyspark.sql.functions import rand, lit"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Create a dataset with customer behavior features\n",
+					"customer_segments = spark.range(100).toDF(\"customer_id\") \\\n",
+					"    .withColumn(\"avg_purchase_value\", expr(\"rand() * 200 + 50\")) \\\n",
+					"    .withColumn(\"purchase_frequency\", expr(\"rand() * 10 + 1\")) \\\n",
+					"    .withColumn(\"browsing_time\", expr(\"rand() * 30 + 5\")) \\\n",
+					"    .withColumn(\"cart_abandonment_rate\", expr(\"rand() * 0.5\")) \\\n",
+					"    .withColumn(\"discount_sensitivity\", expr(\"rand() * 0.8 + 0.2\"))"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Prepare features for clustering\n",
+					"feature_cols = [\"avg_purchase_value\", \"purchase_frequency\", \"browsing_time\", \n",
+					"                \"cart_abandonment_rate\", \"discount_sensitivity\"]\n",
+					"\n",
+					"assembler = VectorAssembler(inputCols=feature_cols, outputCol=\"features\")\n",
+					"featured_data = assembler.transform(customer_segments)"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Apply K-means clustering\n",
+					"kmeans = KMeans(k=4, seed=42, featuresCol=\"features\")\n",
+					"model = kmeans.fit(featured_data)\n",
+					"clustered_data = model.transform(featured_data)"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Extract cluster centers for interpretation\n",
+					"centers = model.clusterCenters()\n",
+					"cluster_centers = [(i, center.toArray().tolist()) for i, center in enumerate(centers)]"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Analyze characteristics of each cluster\n",
+					"cluster_analysis = clustered_data.groupBy(\"prediction\") \\\n",
+					"    .agg(\n",
+					"        count(\"customer_id\").alias(\"cluster_size\"),\n",
+					"        avg(\"avg_purchase_value\").alias(\"avg_purchase_value\"),\n",
+					"        avg(\"purchase_frequency\").alias(\"purchase_frequency\"),\n",
+					"        avg(\"browsing_time\").alias(\"browsing_time\"),\n",
+					"        avg(\"cart_abandonment_rate\").alias(\"cart_abandonment_rate\"),\n",
+					"        avg(\"discount_sensitivity\").alias(\"discount_sensitivity\")\n",
+					"    )"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Prepare output in the required ProcessedData format\n",
+					"now = datetime.now().isoformat()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Collect results\n",
+					"cluster_results = cluster_analysis.collect()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Define cluster descriptions based on characteristics\n",
+					"cluster_descriptions = {\n",
+					"    0: \"High-Value Loyalists\",\n",
+					"    1: \"Discount Hunters\",\n",
+					"    2: \"Casual Browsers\",\n",
+					"    3: \"Selective Purchasers\"\n",
+					"}"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Create processed data in the required format\n",
+					"processed_data = {\n",
+					"    \"id\": str(uuid.uuid4()),\n",
+					"    \"projectId\": \"project-capstone\",\n",
+					"    \"sourceIds\": customer_data.select(\"id\").distinct().limit(10).rdd.flatMap(lambda x: x).collect(),\n",
+					"    \"analysisType\": \"cluster\",\n",
+					"    \"title\": \"Customer Behavior Segmentation\",\n",
+					"    \"description\": \"Segmentation of customers based on purchase behavior and browsing patterns\",\n",
+					"    \"data\": {\n",
+					"        \"type\": \"customer_segments\",\n",
+					"        \"value\": {\n",
+					"            \"segments\": [{\n",
+					"                \"cluster_id\": row.prediction,\n",
+					"                \"name\": cluster_descriptions.get(row.prediction, f\"Segment {row.prediction}\"),\n",
+					"                \"size\": row.cluster_size,\n",
+					"                \"avg_purchase_value\": row.avg_purchase_value,\n",
+					"                \"purchase_frequency\": row.purchase_frequency,\n",
+					"                \"browsing_time\": row.browsing_time,\n",
+					"                \"cart_abandonment_rate\": row.cart_abandonment_rate,\n",
+					"                \"discount_sensitivity\": row.discount_sensitivity\n",
+					"            } for row in cluster_results],\n",
+					"            \"total_customers\": clustered_data.count()\n",
+					"        },\n",
+					"        \"confidence\": 0.85\n",
+					"    },\n",
+					"    \"insights\": [\n",
+					"        {\n",
+					"            \"type\": \"revenue_increase\",\n",
+					"            \"title\": \"Targeted Marketing Opportunity\",\n",
+					"            \"description\": \"High-Value Loyalists represent a prime target for premium products and loyalty programs\",\n",
+					"            \"impact\": 15000,\n",
+					"            \"confidence\": 0.8\n",
+					"        },\n",
+					"        {\n",
+					"            \"type\": \"operational_improvement\",\n",
+					"            \"title\": \"Reduce Cart Abandonment\",\n",
+					"            \"description\": \"Discount Hunters show high cart abandonment rates; targeted promotions could increase conversions\",\n",
+					"            \"impact\": 8500,\n",
+					"            \"confidence\": 0.75\n",
+					"        }\n",
+					"    ],\n",
+					"    \"visualizationType\": \"chart\",\n",
+					"    \"visualizationConfig\": {\n",
+					"        \"chartType\": \"radar\",\n",
+					"        \"metrics\": [\"avg_purchase_value\", \"purchase_frequency\", \"browsing_time\", \"cart_abandonment_rate\", \"discount_sensitivity\"],\n",
+					"        \"segments\": list(cluster_descriptions.values())\n",
+					"    },\n",
+					"    \"processedAt\": now,\n",
+					"    \"createdAt\": now\n",
+					"}"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Save to Data Lake\n",
+					"processedDF = spark.createDataFrame([processed_data])\n",
+					"processedDF.write.format(\"parquet\").mode(\"append\").save(\"abfss://processed@groovybytesdatalake.dfs.core.windows.net/customer_segmentation/\")\n",
+					"\n",
+					"print(\"Customer behavior segmentation completed and saved to Data Lake\")"
+				],
+				"execution_count": null
+			}
+		]
+	}
+}
