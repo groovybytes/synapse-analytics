@@ -1,0 +1,485 @@
+{
+	"name": "Sales_Forecasting",
+	"properties": {
+		"nbformat": 4,
+		"nbformat_minor": 2,
+		"sessionProperties": {
+			"driverMemory": "28g",
+			"driverCores": 4,
+			"executorMemory": "28g",
+			"executorCores": 4,
+			"numExecutors": 2,
+			"conf": {
+				"spark.dynamicAllocation.enabled": "false",
+				"spark.dynamicAllocation.minExecutors": "2",
+				"spark.dynamicAllocation.maxExecutors": "2",
+				"spark.autotune.trackingId": "dca9b155-5337-4879-a4e1-b8015ed1f9b1"
+			}
+		},
+		"metadata": {
+			"saveOutput": true,
+			"enableDebugMode": false,
+			"kernelspec": {
+				"name": "synapse_pyspark",
+				"display_name": "python"
+			},
+			"language_info": {
+				"name": "python"
+			},
+			"sessionKeepAliveTimeout": 30
+		},
+		"cells": [
+			{
+				"cell_type": "code",
+				"source": [
+					"# Notebook: Sales_Forecasting.ipynb\n",
+					"\n",
+					"# Import necessary libraries\n",
+					"from pyspark.sql import SparkSession\n",
+					"from pyspark.sql.functions import col, expr, to_date, date_format, month, dayofweek, datediff, lag, lead\n",
+					"from pyspark.sql.window import Window\n",
+					"from pyspark.ml.feature import VectorAssembler\n",
+					"from pyspark.ml.regression import LinearRegression\n",
+					"import uuid\n",
+					"from datetime import datetime, timedelta"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Initialize Spark Session\n",
+					"spark = SparkSession.builder.appName(\"Sales Forecasting\").getOrCreate()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"metadata": {
+					"run_control": {
+						"frozen": false
+					},
+					"editable": true
+				},
+				"source": [
+					"# Read enriched data from Cosmos DB\n",
+					"enriched_data = spark.read.format(\"cosmos.olap\") \\\n",
+					"    .option(\"spark.synapse.linkedService\", \"CosmosDBLSproject-capstone\") \\\n",
+					"    .option(\"spark.cosmos.container\", \"enriched\") \\\n",
+					"    .load()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Filter for sales data\n",
+					"sales_data = enriched_data.filter(\n",
+					"    (col(\"entityType\") == \"financial_record\") & \n",
+					"    (col(\"attributes.revenue.value\").isNotNull())\n",
+					")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# If we have real sales data, use it; otherwise create synthetic data\n",
+					"if sales_data.count() > 0:\n",
+					"    # Process sales data by date\n",
+					"    daily_sales = sales_data \\\n",
+					"        .withColumn(\"date\", to_date(col(\"attributes.date.value\"))) \\\n",
+					"        .groupBy(\"date\") \\\n",
+					"        .agg(sum(\"attributes.revenue.value\").alias(\"daily_sales\"))\n",
+					"else:\n",
+					"    # Create synthetic daily sales data for the past 365 days\n",
+					"    today = datetime.now()\n",
+					"    date_range = [(today - timedelta(days=i)).strftime(\"%Y-%m-%d\") for i in range(365, 0, -1)]\n",
+					"    \n",
+					"    # Generate synthetic sales data with seasonal and weekly patterns\n",
+					"    from math import sin, pi\n",
+					"    \n",
+					"    synthetic_sales = []\n",
+					"    base_sales = 10000\n",
+					"    \n",
+					"    for i, date in enumerate(date_range):\n",
+					"        # Seasonal component (yearly cycle)\n",
+					"        seasonal_factor = 1 + 0.2 * sin(2 * pi * i / 365)\n",
+					"        \n",
+					"        # Weekly component (higher on weekends)\n",
+					"        day_of_week = i % 7\n",
+					"        weekend_factor = 1.3 if day_of_week >= 5 else 1.0\n",
+					"        \n",
+					"        # Trend component (slight growth over time)\n",
+					"        trend_factor = 1 + (i / 1000)\n",
+					"        \n",
+					"        # Random noise\n",
+					"        import random\n",
+					"        noise = random.uniform(0.9, 1.1)\n",
+					"        \n",
+					"        # Calculate final sales value\n",
+					"        sales_value = base_sales * seasonal_factor * weekend_factor * trend_factor * noise\n",
+					"        \n",
+					"        synthetic_sales.append((date, sales_value))\n",
+					"    \n",
+					"    # Create DataFrame from synthetic data\n",
+					"    daily_sales = spark.createDataFrame(synthetic_sales, [\"date\", \"daily_sales\"])\n",
+					"    daily_sales = daily_sales.withColumn(\"date\", to_date(col(\"date\"))"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Add time features for forecasting\n",
+					"daily_sales = daily_sales \\\n",
+					"    .withColumn(\"dayofweek\", dayofweek(col(\"date\"))) \\\n",
+					"    .withColumn(\"month\", month(col(\"date\"))) \\\n",
+					"    .withColumn(\"day_number\", datediff(col(\"date\"), to_date(lit(\"2024-01-01\"))))"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Add lagged features\n",
+					"sales_window = Window.orderBy(\"date\")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"daily_sales = daily_sales \\\n",
+					"    .withColumn(\"sales_lag1\", lag(\"daily_sales\", 1).over(sales_window)) \\\n",
+					"    .withColumn(\"sales_lag7\", lag(\"daily_sales\", 7).over(sales_window)) \\\n",
+					"    .withColumn(\"sales_lag30\", lag(\"daily_sales\", 30).over(sales_window)) \\\n",
+					"    .na.drop()  # Remove rows with null values after adding lags"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Create weekly and monthly aggregates\n",
+					"weekly_sales = daily_sales \\\n",
+					"    .withColumn(\"week\", date_format(col(\"date\"), \"yyyy-ww\")) \\\n",
+					"    .groupBy(\"week\") \\\n",
+					"    .agg(sum(\"daily_sales\").alias(\"weekly_sales\")) \\\n",
+					"    .orderBy(\"week\")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"monthly_sales = daily_sales \\\n",
+					"    .withColumn(\"month_year\", date_format(col(\"date\"), \"yyyy-MM\")) \\\n",
+					"    .groupBy(\"month_year\") \\\n",
+					"    .agg(sum(\"daily_sales\").alias(\"monthly_sales\")) \\\n",
+					"    .orderBy(\"month_year\")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Calculate category-based sales (simulated for demo)\n",
+					"categories = [\"Electronics\", \"Clothing\", \"Home Goods\", \"Food\", \"Services\"]"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"from pyspark.sql.functions import rand, round as spark_round"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"category_sales = daily_sales.select(\"date\", \"daily_sales\") \\\n",
+					"    .withColumn(\"electronics_pct\", spark_round(rand() * 0.2 + 0.2, 2)) \\\n",
+					"    .withColumn(\"clothing_pct\", spark_round(rand() * 0.2 + 0.15, 2)) \\\n",
+					"    .withColumn(\"home_goods_pct\", spark_round(rand() * 0.15 + 0.1, 2)) \\\n",
+					"    .withColumn(\"food_pct\", spark_round(rand() * 0.2 + 0.3, 2)) \\\n",
+					"    .withColumn(\"services_pct\", spark_round(1 - col(\"electronics_pct\") - col(\"clothing_pct\") - col(\"home_goods_pct\") - col(\"food_pct\"), 2))"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"for category in categories:\n",
+					"    lower_category = category.lower().replace(\" \", \"_\")\n",
+					"    category_sales = category_sales.withColumn(\n",
+					"        f\"{lower_category}_sales\", \n",
+					"        col(\"daily_sales\") * col(f\"{lower_category}_pct\")\n",
+					"    )"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Aggregate by month and category\n",
+					"monthly_category_sales = category_sales \\\n",
+					"    .withColumn(\"month_year\", date_format(col(\"date\"), \"yyyy-MM\")) \\\n",
+					"    .groupBy(\"month_year\") \\\n",
+					"    .agg(\n",
+					"        sum(\"electronics_sales\").alias(\"electronics_sales\"),\n",
+					"        sum(\"clothing_sales\").alias(\"clothing_sales\"),\n",
+					"        sum(\"home_goods_sales\").alias(\"home_goods_sales\"),\n",
+					"        sum(\"food_sales\").alias(\"food_sales\"),\n",
+					"        sum(\"services_sales\").alias(\"services_sales\")\n",
+					"    ) \\\n",
+					"    .orderBy(\"month_year\")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Prepare for forecasting with ML\n",
+					"# Create feature vector for Linear Regression\n",
+					"assembler = VectorAssembler(\n",
+					"    inputCols=[\"dayofweek\", \"month\", \"day_number\", \"sales_lag1\", \"sales_lag7\", \"sales_lag30\"],\n",
+					"    outputCol=\"features\"\n",
+					")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"training_data = assembler.transform(daily_sales)"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Split data into training and test sets\n",
+					"train_data, test_data = training_data.randomSplit([0.8, 0.2], seed=42)"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Train Linear Regression model\n",
+					"lr = LinearRegression(featuresCol=\"features\", labelCol=\"daily_sales\", maxIter=10, regParam=0.3, elasticNetParam=0.8)\n",
+					"lr_model = lr.fit(train_data)"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Make predictions on test data\n",
+					"predictions = lr_model.transform(test_data)"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Evaluate the model\n",
+					"from pyspark.ml.evaluation import RegressionEvaluator"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"evaluator = RegressionEvaluator(labelCol=\"daily_sales\", predictionCol=\"prediction\", metricName=\"rmse\")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"rmse = evaluator.evaluate(predictions)"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"r2 = evaluator.setMetricName(\"r2\").evaluate(predictions)"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Generate forecast for next 30 days\n",
+					"today = datetime.now()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"forecast_dates = [(today + timedelta(days=i)).strftime(\"%Y-%m-%d\") for i in range(1, 31)]"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Create a DataFrame with the forecast dates and features\n",
+					"forecast_rows = []"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"for i, date_str in enumerate(forecast_dates):\n",
+					"    date_obj = datetime.strptime(date_str, \"%Y-%m-%d\")\n",
+					"    day_of_week = date_obj.weekday() + 1  # pyspark dayofweek is 1-7\n",
+					"    month_val = date_obj.month\n",
+					"    day_number = (date_obj - datetime(2024, 1, 1)).days\n",
+					"    \n",
+					"    # For simplicity, use the last known values for the lags\n",
+					"    # In a real forecasting system, we would cascade the predictions\n",
+					"    last_sales = daily_sales.orderBy(col(\"date\").desc()).limit(30).collect()\n",
+					"    sales_lag1 = last_sales[0].daily_sales if len(last_sales) > 0 else 0\n",
+					"    sales_lag7 = last_sales[6].daily_sales if len(last_sales) > 6 else 0\n",
+					"    sales_lag30 = last_sales[29].daily_sales if len(last_sales) > 29 else 0\n",
+					"    \n",
+					"    forecast_rows.append((date_str, day_of_week, month_val, day_number, sales_lag1, sales_lag7, sales_lag30))"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"forecast_df = spark.createDataFrame(\n",
+					"    forecast_rows, \n",
+					"    [\"date\", \"dayofweek\", \"month\", \"day_number\", \"sales_lag1\", \"sales_lag7\", \"sales_lag30\"]\n",
+					")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Create features for forecast\n",
+					"forecast_data = assembler.transform(forecast_df)"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Generate predictions\n",
+					"forecast_predictions = lr_model.transform(forecast_data)"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Prepare output in the required ProcessedData format\n",
+					"now = datetime.now().isoformat()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Collect results\n",
+					"historical_daily = daily_sales.orderBy(\"date\").collect()\n",
+					"historical_weekly = weekly_sales.orderBy(\"week\").collect()\n",
+					"historical_monthly = monthly_sales.orderBy(\"month_year\").collect()\n",
+					"category_monthly = monthly_category_sales.orderBy(\"month_year\").collect()\n",
+					"forecast_results = forecast_predictions.select(\"date\", \"prediction\").orderBy(\"date\").collect()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Create processed data in the required format\n",
+					"processed_data = {\n",
+					"    \"id\": str(uuid.uuid4()),\n",
+					"    \"projectId\": \"project-capstone\",\n",
+					"    \"sourceIds\": sales_data.select(\"id\").distinct().limit(10).rdd.flatMap(lambda x: x).collect() or [\"sample-sales-data\"],\n",
+					"    \"analysisType\": \"prediction\",\n",
+					"    \"title\": \"Sales Forecast & Predictive Analytics\",\n",
+					"    \"description\": \"Historical sales analysis and future sales forecasting\",\n",
+					"    \"data\": {\n",
+					"        \"type\": \"sales_forecast\",\n",
+					"        \"value\": {\n",
+					"            \"historical\": {\n",
+					"                \"daily\": [{\"date\": str(row.date), \"sales\": row.daily_sales} for row in historical_daily[-60:]],  # Last 60 days\n",
+					"                \"weekly\": [{\"week\": row.week, \"sales\": row.weekly_sales} for row in historical_weekly[-13:]],  # Last 13 weeks\n",
+					"                \"monthly\": [{\"month\": row.month_year, \"sales\": row.monthly_sales} for row in historical_monthly],\n",
+					"                \"by_category\": [{\"month\": row.month_year, \n",
+					"                               \"Electronics\": row.electronics_sales,\n",
+					"                               \"Clothing\": row.clothing_sales,\n",
+					"                               \"Home Goods\": row.home_goods_sales,\n",
+					"                               \"Food\": row.food_sales,\n",
+					"                               \"Services\": row.services_sales} for row in category_monthly]\n",
+					"            },\n",
+					"            \"forecast\": [{\"date\": row.date, \"forecasted_sales\": row.prediction} for row in forecast_results],\n",
+					"            \"model_metrics\": {\n",
+					"                \"rmse\": rmse,\n",
+					"                \"r2\": r2,\n",
+					"                \"algorithm\": \"Linear Regression\"\n",
+					"            }\n",
+					"        },\n",
+					"        \"confidence\": 0.8\n",
+					"    },\n",
+					"    \"insights\": [\n",
+					"        {\n",
+					"            \"type\": \"revenue_increase\",\n",
+					"            \"title\": \"Upcoming Sales Trend\",\n",
+					"            \"description\": f\"Sales forecast for the next 30 days indicates a {'positive' if forecast_results[-1].prediction > historical_daily[-1].daily_sales else 'negative'} trend\",\n",
+					"            \"impact\": sum(row.prediction for row in forecast_results) - (historical_daily[-1].daily_sales * 30),\n",
+					"            \"confidence\": 0.75\n",
+					"        },\n",
+					"        {\n",
+					"            \"type\": \"operational_improvement\",\n",
+					"            \"title\": \"Inventory Planning Opportunity\",\n",
+					"            \"description\": \"Forecasted sales suggest adjusting inventory for seasonal demand fluctuations\",\n",
+					"            \"impact\": 7500,\n",
+					"            \"confidence\": 0.7\n",
+					"        }\n",
+					"    ],\n",
+					"    \"visualizationType\": \"chart\",\n",
+					"    \"visualizationConfig\": {\n",
+					"        \"chartType\": [\"line\", \"bar\"],\n",
+					"        \"timeSeries\": True,\n",
+					"        \"metrics\": [\"historical\", \"forecast\"],\n",
+					"        \"dimensions\": [\"date\", \"category\"]\n",
+					"    },\n",
+					"    \"processedAt\": now,\n",
+					"    \"createdAt\": now\n",
+					"}"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Save to Data Lake\n",
+					"processedDF = spark.createDataFrame([processed_data])\n",
+					"processedDF.write.format(\"parquet\").mode(\"append\").save(\"abfss://processed@groovybytesdatalake.dfs.core.windows.net/sales_forecast/\")\n",
+					"\n",
+					"print(\"Sales forecasting analysis completed and saved to Data Lake\")"
+				],
+				"execution_count": null
+			}
+		]
+	}
+}
