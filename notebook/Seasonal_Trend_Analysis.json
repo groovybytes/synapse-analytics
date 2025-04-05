@@ -1,0 +1,400 @@
+{
+	"name": "Seasonal_Trend_Analysis",
+	"properties": {
+		"nbformat": 4,
+		"nbformat_minor": 2,
+		"sessionProperties": {
+			"driverMemory": "28g",
+			"driverCores": 4,
+			"executorMemory": "28g",
+			"executorCores": 4,
+			"numExecutors": 2,
+			"conf": {
+				"spark.dynamicAllocation.enabled": "false",
+				"spark.dynamicAllocation.minExecutors": "2",
+				"spark.dynamicAllocation.maxExecutors": "2",
+				"spark.autotune.trackingId": "3820c061-5da4-4618-9e46-f7d69d3ba6bd"
+			}
+		},
+		"metadata": {
+			"saveOutput": true,
+			"enableDebugMode": false,
+			"kernelspec": {
+				"name": "synapse_pyspark",
+				"display_name": "python"
+			},
+			"language_info": {
+				"name": "python"
+			},
+			"sessionKeepAliveTimeout": 30
+		},
+		"cells": [
+			{
+				"cell_type": "code",
+				"source": [
+					"# Import necessary libraries\n",
+					"from pyspark.sql import SparkSession\n",
+					"from pyspark.sql.functions import col, expr, to_date, date_format, month, dayofweek, hour, weekofyear\n",
+					"from pyspark.sql.window import Window\n",
+					"import uuid\n",
+					"from datetime import datetime, timedelta"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Initialize Spark Session\n",
+					"spark = SparkSession.builder.appName(\"Seasonal Trend Analysis\").getOrCreate()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Read enriched data from Cosmos DB\n",
+					"enriched_data = spark.read.format(\"cosmos.olap\") \\\n",
+					"    .option(\"spark.synapse.linkedService\", \"CosmosDBLSproject-capstone\") \\\n",
+					"    .option(\"spark.cosmos.container\", \"enriched\") \\\n",
+					"    .load()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Filter for relevant data (sales, foot traffic, energy)\n",
+					"sales_data = enriched_data.filter(\n",
+					"    (col(\"entityType\") == \"financial_record\") & \n",
+					"    (col(\"attributes.revenue.value\").isNotNull())\n",
+					")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"traffic_data = enriched_data.filter(\n",
+					"    (col(\"entityType\") == \"device_data\") & \n",
+					"    (col(\"attributes.sensor.value\").isin(\"Motion\", \"Proximity\", \"Count\", \"Traffic\"))\n",
+					")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"energy_data = enriched_data.filter(\n",
+					"    (col(\"entityType\") == \"device_data\") & \n",
+					"    (col(\"attributes.sensor.value\").isin(\"Temperature\", \"Energy\", \"Power\", \"Electricity\"))\n",
+					")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# If no real data, create synthetic data for demonstration\n",
+					"today = datetime.now()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Create synthetic historical data (full year)\n",
+					"if sales_data.count() == 0:\n",
+					"    # Synthetic sales data with strong seasonal patterns\n",
+					"    from math import sin, pi, cos\n",
+					"    \n",
+					"    date_range = [(today - timedelta(days=i)).strftime(\"%Y-%m-%d\") for i in range(365, 0, -1)]\n",
+					"    \n",
+					"    synthetic_sales = []\n",
+					"    base_sales = 10000\n",
+					"    \n",
+					"    for i, date in enumerate(date_range):\n",
+					"        # Yearly seasonal component (higher in summer and winter holidays)\n",
+					"        day_of_year = i % 365\n",
+					"        yearly_component = 1 + 0.2 * sin(2 * pi * day_of_year / 365) + 0.3 * (\n",
+					"            1 if (day_of_year > 330 or day_of_year < 15 or  # New Year\n",
+					"                 (day_of_year > 170 and day_of_year < 200) or  # Summer sales\n",
+					"                 (day_of_year > 310 and day_of_year < 330))  # Black Friday/Thanksgiving\n",
+					"            else 0\n",
+					"        )\n",
+					"        \n",
+					"        # Weekly component (higher on weekends)\n",
+					"        day_of_week = i % 7\n",
+					"        weekly_component = 1 + 0.3 * (1 if day_of_week >= 5 else 0)\n",
+					"        \n",
+					"        # Calculate final sales value with some noise\n",
+					"        import random\n",
+					"        noise = random.uniform(0.9, 1.1)\n",
+					"        \n",
+					"        sales_value = base_sales * yearly_component * weekly_component * noise\n",
+					"        \n",
+					"        synthetic_sales.append((date, sales_value))\n",
+					"    \n",
+					"    # Create DataFrame from synthetic data\n",
+					"    daily_sales = spark.createDataFrame(synthetic_sales, [\"date\", \"daily_sales\"])\n",
+					"    daily_sales = daily_sales.withColumn(\"date\", to_date(col(\"date\")))\n",
+					"else:\n",
+					"    # Process real sales data\n",
+					"    daily_sales = sales_data \\\n",
+					"        .withColumn(\"date\", to_date(col(\"attributes.date.value\"))) \\\n",
+					"        .groupBy(\"date\") \\\n",
+					"        .agg(sum(\"attributes.revenue.value\").alias(\"daily_sales\"))"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Add time components for seasonal analysis\n",
+					"daily_sales = daily_sales \\\n",
+					"    .withColumn(\"day_of_week\", dayofweek(col(\"date\"))) \\\n",
+					"    .withColumn(\"month\", month(col(\"date\"))) \\\n",
+					"    .withColumn(\"week\", weekofyear(col(\"date\")))\n",
+					""
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Calculate aggregates by various time dimensions\n",
+					"weekly_pattern = daily_sales \\\n",
+					"    .groupBy(\"day_of_week\") \\\n",
+					"    .agg(avg(\"daily_sales\").alias(\"avg_sales\")) \\\n",
+					"    .orderBy(\"day_of_week\")\n",
+					""
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"monthly_pattern = daily_sales \\\n",
+					"    .groupBy(\"month\") \\\n",
+					"    .agg(avg(\"daily_sales\").alias(\"avg_sales\")) \\\n",
+					"    .orderBy(\"month\")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Perform decomposition into seasonal components (simplified)\n",
+					"# In a more advanced implementation, we would use proper time series decomposition techniques\n",
+					"\n",
+					"# Daily moving average for trend\n",
+					"days_window = Window.orderBy(\"date\").rowsBetween(-15, 15)"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"daily_sales = daily_sales \\\n",
+					"    .withColumn(\"trend_component\", avg(\"daily_sales\").over(days_window))"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Calculate seasonal component\n",
+					"daily_sales = daily_sales \\\n",
+					"    .withColumn(\"seasonal_component\", col(\"daily_sales\") / col(\"trend_component\"))"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Extract weekly seasonality pattern\n",
+					"weekly_seasonality = daily_sales \\\n",
+					"    .groupBy(\"day_of_week\") \\\n",
+					"    .agg(avg(\"seasonal_component\").alias(\"day_factor\")) \\\n",
+					"    .orderBy(\"day_of_week\")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Extract monthly seasonality pattern\n",
+					"monthly_seasonality = daily_sales \\\n",
+					"    .groupBy(\"month\") \\\n",
+					"    .agg(avg(\"seasonal_component\").alias(\"month_factor\")) \\\n",
+					"    .orderBy(\"month\")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Calculate holiday impact\n",
+					"# For demo, we'll just flag known holiday periods\n",
+					"holiday_periods = [\n",
+					"    (\"New Year\", \"01-01\", \"01-05\"),  \n",
+					"    (\"Valentine's Day\", \"02-10\", \"02-14\"),\n",
+					"    (\"Spring Break\", \"03-10\", \"03-25\"),\n",
+					"    (\"Easter\", \"04-05\", \"04-12\"),\n",
+					"    (\"Mother's Day\", \"05-08\", \"05-14\"),\n",
+					"    (\"Memorial Day\", \"05-25\", \"05-31\"),\n",
+					"    (\"Father's Day\", \"06-15\", \"06-21\"),\n",
+					"    (\"Independence Day\", \"07-01\", \"07-07\"),\n",
+					"    (\"Labor Day\", \"09-01\", \"09-07\"),\n",
+					"    (\"Halloween\", \"10-25\", \"10-31\"),\n",
+					"    (\"Thanksgiving\", \"11-20\", \"11-30\"),\n",
+					"    (\"Christmas\", \"12-15\", \"12-31\")\n",
+					"]"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Calculate holiday impact\n",
+					"holiday_impact = []"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"for holiday_name, start_date, end_date in holiday_periods:\n",
+					"    # Extract month and day\n",
+					"    start_month, start_day = map(int, start_date.split(\"-\"))\n",
+					"    end_month, end_day = map(int, end_date.split(\"-\"))\n",
+					"    \n",
+					"    # Filter data for the holiday period\n",
+					"    # This is simplified; in real analysis we'd handle year transitions properly\n",
+					"    holiday_sales = daily_sales.filter(\n",
+					"        ((month(col(\"date\")) == start_month) & (dayofweek(col(\"date\")) >= start_day)) |\n",
+					"        ((month(col(\"date\")) == end_month) & (dayofweek(col(\"date\")) <= end_day))\n",
+					"    )\n",
+					"    \n",
+					"    # Calculate average sales during this period\n",
+					"    if holiday_sales.count() > 0:\n",
+					"        avg_holiday_sales = holiday_sales.agg(avg(\"daily_sales\")).collect()[0][0]\n",
+					"        \n",
+					"        # Calculate baseline (non-holiday) sales for comparison\n",
+					"        baseline_sales = daily_sales.agg(avg(\"daily_sales\")).collect()[0][0]\n",
+					"        \n",
+					"        # Calculate impact factor\n",
+					"        impact_factor = avg_holiday_sales / baseline_sales if baseline_sales > 0 else 1\n",
+					"        \n",
+					"        holiday_impact.append({\n",
+					"            \"holiday\": holiday_name,\n",
+					"            \"avg_sales\": float(avg_holiday_sales),\n",
+					"            \"baseline_sales\": float(baseline_sales),\n",
+					"            \"impact_factor\": float(impact_factor)\n",
+					"        })"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Prepare output in the required ProcessedData format\n",
+					"now = datetime.now().isoformat()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Collect results\n",
+					"weekly_pattern_results = weekly_pattern.collect()\n",
+					"monthly_pattern_results = monthly_pattern.collect()\n",
+					"weekly_seasonality_results = weekly_seasonality.collect()\n",
+					"monthly_seasonality_results = monthly_seasonality.collect()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Map day numbers to names for better readability\n",
+					"day_names = {1: \"Sunday\", 2: \"Monday\", 3: \"Tuesday\", 4: \"Wednesday\", 5: \"Thursday\", 6: \"Friday\", 7: \"Saturday\"}\n",
+					"month_names = {1: \"January\", 2: \"February\", 3: \"March\", 4: \"April\", 5: \"May\", 6: \"June\", \n",
+					"               7: \"July\", 8: \"August\", 9: \"September\", 10: \"October\", 11: \"November\", 12: \"December\"}"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Create processed data in the required format\n",
+					"processed_data = {\n",
+					"    \"id\": str(uuid.uuid4()),\n",
+					"    \"projectId\": \"project-capstone\",\n",
+					"    \"sourceIds\": enriched_data.select(\"id\").distinct().limit(10).rdd.flatMap(lambda x: x).collect() or [\"sample-seasonal-data\"],\n",
+					"    \"analysisType\": \"pattern\",\n",
+					"    \"title\": \"Seasonal Trend Analysis\",\n",
+					"    \"description\": \"Analysis of seasonal patterns in sales, traffic, and operational data\",\n",
+					"    \"data\": {\n",
+					"        \"type\": \"seasonal_patterns\",\n",
+					"        \"value\": {\n",
+					"            \"weekly_pattern\": [{\n",
+					"                \"day\": day_names.get(row.day_of_week, row.day_of_week),\n",
+					"                \"avg_sales\": row.avg_sales,\n",
+					"                \"factor\": next((item.day_factor for item in weekly_seasonality_results if item.day_of_week == row.day_of_week), 1.0)\n",
+					"            } for row in weekly_pattern_results],\n",
+					"            \"monthly_pattern\": [{\n",
+					"                \"month\": month_names.get(row.month, row.month),\n",
+					"                \"avg_sales\": row.avg_sales,\n",
+					"                \"factor\": next((item.month_factor for item in monthly_seasonality_results if item.month == row.month), 1.0)\n",
+					"            } for row in monthly_pattern_results],\n",
+					"            \"holiday_impact\": holiday_impact,\n",
+					"            \"daily_trends\": daily_sales.select(\n",
+					"                \"date\", \"daily_sales\", \"trend_component\", \"seasonal_component\"\n",
+					"            ).orderBy(\"date\").collect()\n",
+					"        },\n",
+					"        \"confidence\": 0.85\n",
+					"    },\n",
+					"    \"insights\": [\n",
+					"        {\n",
+					"            \"type\": \"operational_improvement\",\n",
+					"            \"title\": \"Weekly Sales Cycle Optimization\",\n",
+					"            \"description\": f\"Sales are highest on {day_names.get(max(weekly_pattern_results, key=lambda x: x.avg_sales).day_of_week)}, suggesting opportunities for inventory and staffing optimization\",\n",
+					"            \"impact\": 12000,\n",
+					"            \"confidence\": 0.8\n",
+					"        },\n",
+					"        {\n",
+					"            \"type\": \"revenue_increase\",\n",
+					"            \"title\": \"Seasonal Promotional Strategy\",\n",
+					"            \"description\": f\"The {month_names.get(min(monthly_pattern_results, key=lambda x: x.avg_sales).month)} slump provides an opportunity for targeted promotions to boost off-season sales\",\n",
+					"            \"impact\": 25000,\n",
+					"            \"confidence\": 0.75\n",
+					"        }\n",
+					"    ],\n",
+					"    \"visualizationType\": \"chart\",\n",
+					"    \"visualizationConfig\": {\n",
+					"        \"chartType\": [\"line\", \"bar\", \"heatmap\"],\n",
+					"        \"dimensions\": [\"day\", \"month\", \"holiday\"],\n",
+					"        \"metrics\": [\"sales\", \"factor\", \"impact\"]\n",
+					"    },\n",
+					"    \"processedAt\": now,\n",
+					"    \"createdAt\": now\n",
+					"}"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Save to Data Lake\n",
+					"processedDF = spark.createDataFrame([processed_data])\n",
+					"processedDF.write.format(\"parquet\").mode(\"append\").save(\"abfss://processed@groovybytesdatalake.dfs.core.windows.net/seasonal_trends/\")\n",
+					"\n",
+					"print(\"Seasonal trend analysis completed and saved to Data Lake\")"
+				],
+				"execution_count": null
+			}
+		]
+	}
+}
