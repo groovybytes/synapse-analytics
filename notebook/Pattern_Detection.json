@@ -1,6 +1,9 @@
 {
 	"name": "Pattern_Detection",
 	"properties": {
+		"folder": {
+			"name": "Analyses"
+		},
 		"nbformat": 4,
 		"nbformat_minor": 2,
 		"sessionProperties": {
@@ -13,7 +16,7 @@
 				"spark.dynamicAllocation.enabled": "false",
 				"spark.dynamicAllocation.minExecutors": "2",
 				"spark.dynamicAllocation.maxExecutors": "2",
-				"spark.autotune.trackingId": "7d66a541-7e64-473d-8807-6e9ef139b28a"
+				"spark.autotune.trackingId": "eea977b8-57be-48e8-a6db-4af2fa70229f"
 			}
 		},
 		"metadata": {

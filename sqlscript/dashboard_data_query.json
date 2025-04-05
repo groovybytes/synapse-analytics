@@ -1,0 +1,17 @@
+{
+	"name": "dashboard_data_query",
+	"properties": {
+		"content": {
+			"query": "-- File: dashboard_data_query.sql\n\n-- This query fetches the latest results from all analysis types\n-- and combines them into a structure suitable for the dashboard\n\nWITH latest_analyses AS (\n    SELECT\n        a.id,\n        a.analysisType,\n        a.title,\n        a.data,\n        a.insights,\n        a.processedAt,\n        ROW_NUMBER() OVER (PARTITION BY a.analysisType ORDER BY a.processedAt DESC) AS rn\n    FROM\n        OPENROWSET(\n            BULK 'abfss://processed@groovybytesdatalake.dfs.core.windows.net/*/*.parquet',\n            FORMAT = 'PARQUET'\n        ) AS a\n    WHERE\n        a.projectId = 'project-capstone'\n)\n\n-- Select only the most recent analysis of each type\nSELECT\n    analysisType,\n    title,\n    data,\n    insights,\n    processedAt\nFROM\n    latest_analyses\nWHERE\n    rn = 1\nORDER BY\n    analysisType",
+			"metadata": {
+				"language": "sql"
+			},
+			"currentConnection": {
+				"databaseName": "master",
+				"poolName": "Built-in"
+			},
+			"resultLimit": 5000
+		},
+		"type": "SqlQuery"
+	}
+}

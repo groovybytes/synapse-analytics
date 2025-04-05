@@ -1,6 +1,9 @@
 {
 	"name": "Run_All_Analyses",
 	"properties": {
+		"folder": {
+			"name": "Analyses"
+		},
 		"nbformat": 4,
 		"nbformat_minor": 2,
 		"sessionProperties": {
@@ -13,7 +16,7 @@
 				"spark.dynamicAllocation.enabled": "false",
 				"spark.dynamicAllocation.minExecutors": "2",
 				"spark.dynamicAllocation.maxExecutors": "2",
-				"spark.autotune.trackingId": "99af8afd-3e37-4600-9c03-a52c4a4d3c68"
+				"spark.autotune.trackingId": "d525aaef-3102-4cdd-9f44-a6ef3c05ab71"
 			}
 		},
 		"metadata": {

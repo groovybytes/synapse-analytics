@@ -1,6 +1,9 @@
 {
 	"name": "Seasonal_Trend_Analysis",
 	"properties": {
+		"folder": {
+			"name": "Analyses"
+		},
 		"nbformat": 4,
 		"nbformat_minor": 2,
 		"sessionProperties": {
@@ -13,7 +16,7 @@
 				"spark.dynamicAllocation.enabled": "false",
 				"spark.dynamicAllocation.minExecutors": "2",
 				"spark.dynamicAllocation.maxExecutors": "2",
-				"spark.autotune.trackingId": "3820c061-5da4-4618-9e46-f7d69d3ba6bd"
+				"spark.autotune.trackingId": "4b65d8cb-c117-4555-9efd-6a8f7f46154c"
 			}
 		},
 		"metadata": {

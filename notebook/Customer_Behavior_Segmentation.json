@@ -1,6 +1,9 @@
 {
 	"name": "Customer_Behavior_Segmentation",
 	"properties": {
+		"folder": {
+			"name": "Analyses"
+		},
 		"nbformat": 4,
 		"nbformat_minor": 2,
 		"sessionProperties": {
