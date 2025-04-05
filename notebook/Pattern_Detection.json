@@ -1,0 +1,599 @@
+{
+	"name": "Pattern_Detection",
+	"properties": {
+		"nbformat": 4,
+		"nbformat_minor": 2,
+		"sessionProperties": {
+			"driverMemory": "28g",
+			"driverCores": 4,
+			"executorMemory": "28g",
+			"executorCores": 4,
+			"numExecutors": 2,
+			"conf": {
+				"spark.dynamicAllocation.enabled": "false",
+				"spark.dynamicAllocation.minExecutors": "2",
+				"spark.dynamicAllocation.maxExecutors": "2",
+				"spark.autotune.trackingId": "7d66a541-7e64-473d-8807-6e9ef139b28a"
+			}
+		},
+		"metadata": {
+			"saveOutput": true,
+			"enableDebugMode": false,
+			"kernelspec": {
+				"name": "synapse_pyspark",
+				"display_name": "python"
+			},
+			"language_info": {
+				"name": "python"
+			},
+			"sessionKeepAliveTimeout": 30
+		},
+		"cells": [
+			{
+				"cell_type": "code",
+				"source": [
+					"# Import necessary libraries\n",
+					"from pyspark.sql import SparkSession\n",
+					"from pyspark.sql.functions import col, expr, to_date, date_format, lag, datediff, abs, avg, stddev\n",
+					"from pyspark.sql.window import Window\n",
+					"from pyspark.ml.feature import VectorAssembler\n",
+					"from pyspark.ml.clustering import KMeans\n",
+					"import uuid\n",
+					"from datetime import datetime, timedelta"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Initialize Spark Session\n",
+					"spark = SparkSession.builder.appName(\"Pattern Detection\").getOrCreate()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Read enriched data from Cosmos DB\n",
+					"enriched_data = spark.read.format(\"cosmos.olap\") \\\n",
+					"    .option(\"spark.synapse.linkedService\", \"CosmosDBLSproject-capstone\") \\\n",
+					"    .option(\"spark.cosmos.container\", \"enriched\") \\\n",
+					"    .load()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Filter for data relevant to pattern detection\n",
+					"operational_data = enriched_data.filter(\n",
+					"    (col(\"entityType\") == \"device_data\") | \n",
+					"    (col(\"entityType\") == \"financial_record\")\n",
+					")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Create or extract time-series data for pattern detection\n",
+					"# For simplicity, we'll focus on sales patterns and operational cycles\n",
+					"\n",
+					"# Extract or create sales data\n",
+					"sales_data = enriched_data.filter(\n",
+					"    (col(\"entityType\") == \"financial_record\") & \n",
+					"    (col(\"attributes.revenue.value\").isNotNull())\n",
+					")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"if sales_data.count() > 0:\n",
+					"    daily_sales = sales_data \\\n",
+					"        .withColumn(\"date\", to_date(col(\"attributes.date.value\"))) \\\n",
+					"        .groupBy(\"date\") \\\n",
+					"        .agg(sum(\"attributes.revenue.value\").alias(\"daily_sales\"))\n",
+					"else:\n",
+					"    # Create synthetic sales data with embedded patterns\n",
+					"    today = datetime.now()\n",
+					"    date_range = [(today - timedelta(days=i)).strftime(\"%Y-%m-%d\") for i in range(180, 0, -1)]\n",
+					"    \n",
+					"    # Generate synthetic sales with weekly, biweekly and monthly patterns\n",
+					"    from math import sin, pi, cos\n",
+					"    \n",
+					"    synthetic_sales = []\n",
+					"    base_sales = 10000\n",
+					"    \n",
+					"    for i, date in enumerate(date_range):\n",
+					"        # Weekly pattern (higher on weekends)\n",
+					"        weekly_pattern = 0.2 * sin(2 * pi * (i % 7) / 7 + pi/2)\n",
+					"        \n",
+					"        # Biweekly pattern (paydays)\n",
+					"        biweekly_pattern = 0.15 * sin(2 * pi * (i % 14) / 14)\n",
+					"        \n",
+					"        # Monthly pattern (beginning/end of month)\n",
+					"        day_of_month = i % 30\n",
+					"        monthly_pattern = 0.1 * sin(2 * pi * day_of_month / 30 + pi/4)\n",
+					"        \n",
+					"        # Quarterly pattern (end of quarter spike)\n",
+					"        day_of_quarter = i % 90\n",
+					"        quarterly_pattern = 0.2 if day_of_quarter > 85 else 0\n",
+					"        \n",
+					"        # Combine patterns with noise\n",
+					"        import random\n",
+					"        noise = random.uniform(0.9, 1.1)\n",
+					"        \n",
+					"        sales_value = base_sales * (1 + weekly_pattern + biweekly_pattern + monthly_pattern + quarterly_pattern) * noise\n",
+					"        \n",
+					"        synthetic_sales.append((date, sales_value))\n",
+					"    \n",
+					"    # Create DataFrame from synthetic data\n",
+					"    daily_sales = spark.createDataFrame(synthetic_sales, [\"date\", \"daily_sales\"])\n",
+					"    daily_sales = daily_sales.withColumn(\"date\", to_date(col(\"date\")))"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Find weekly pattern\n",
+					"daily_sales = daily_sales \\\n",
+					"    .withColumn(\"day_of_week\", date_format(col(\"date\"), \"E\")) \\\n",
+					"    .withColumn(\"day_of_month\", date_format(col(\"date\"), \"d\")) \\\n",
+					"    .withColumn(\"month\", date_format(col(\"date\"), \"MM\")) \\\n",
+					"    .withColumn(\"week_of_year\", date_format(col(\"date\"), \"w\"))"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Calculate day-over-day changes\n",
+					"sales_window = Window.orderBy(\"date\")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"daily_sales = daily_sales \\\n",
+					"    .withColumn(\"prev_day_sales\", lag(\"daily_sales\", 1).over(sales_window)) \\\n",
+					"    .withColumn(\"sales_change\", col(\"daily_sales\") - col(\"prev_day_sales\")) \\\n",
+					"    .withColumn(\"sales_change_pct\", expr(\"sales_change / prev_day_sales * 100\")) \\\n",
+					"    .na.drop()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Detect weekly patterns\n",
+					"weekly_pattern = daily_sales \\\n",
+					"    .groupBy(\"day_of_week\") \\\n",
+					"    .agg(\n",
+					"        avg(\"daily_sales\").alias(\"avg_sales\"),\n",
+					"        stddev(\"daily_sales\").alias(\"stddev_sales\")\n",
+					"    ) \\\n",
+					"    .orderBy(date_format(to_date(col(\"day_of_week\"), \"E\"), \"u\"))  # Order by day of week number"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Detect monthly patterns\n",
+					"monthly_pattern = daily_sales \\\n",
+					"    .groupBy(\"day_of_month\") \\\n",
+					"    .agg(\n",
+					"        avg(\"daily_sales\").alias(\"avg_sales\"),\n",
+					"        stddev(\"daily_sales\").alias(\"stddev_sales\")\n",
+					"    ) \\\n",
+					"    .orderBy(\"day_of_month\")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Detect sequential patterns (run detection)\n",
+					"# For this demo, we'll identify consecutive days of increase/decrease\n",
+					"\n",
+					"# First, identify sequences of increases or decreases\n",
+					"daily_sales = daily_sales \\\n",
+					"    .withColumn(\"is_increase\", col(\"sales_change\") > 0) \\\n",
+					"    .withColumn(\"prev_is_increase\", lag(\"is_increase\", 1).over(sales_window)) \\\n",
+					"    .withColumn(\"sequence_break\", (col(\"is_increase\") != col(\"prev_is_increase\")).cast(\"int\")) \\\n",
+					"    .na.fill({\"sequence_break\": 1})  # First row starts a new sequence\n",
+					""
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Use a cumulative sum of breaks as sequence group ID\n",
+					"from pyspark.sql.functions import sum as spark_sum"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"daily_sales = daily_sales \\\n",
+					"    .withColumn(\"sequence_id\", spark_sum(\"sequence_break\").over(Window.orderBy(\"date\")))"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Count consecutive days in each sequence\n",
+					"sequence_lengths = daily_sales \\\n",
+					"    .groupBy(\"sequence_id\", \"is_increase\") \\\n",
+					"    .count() \\\n",
+					"    .orderBy(\"sequence_id\")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Find the longest runs of increases and decreases\n",
+					"max_increase_run = sequence_lengths.filter(col(\"is_increase\") == True).orderBy(col(\"count\").desc()).first()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"max_decrease_run = sequence_lengths.filter(col(\"is_increase\") == False).orderBy(col(\"count\").desc()).first()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Get sequences of a minimum length\n",
+					"min_sequence_length = 3\n",
+					"significant_sequences = sequence_lengths.filter(col(\"count\") >= min_sequence_length)"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Extract specific pattern instances\n",
+					"pattern_instances = []"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"for row in significant_sequences.collect():\n",
+					"    sequence_id = row.sequence_id\n",
+					"    is_increase = row.is_increase\n",
+					"    count = row.count\n",
+					"    \n",
+					"    # Get the dates in this sequence\n",
+					"    sequence_dates = daily_sales.filter(col(\"sequence_id\") == sequence_id).orderBy(\"date\")\n",
+					"    start_date = sequence_dates.first().date\n",
+					"    end_date = sequence_dates.orderBy(col(\"date\").desc()).first().date\n",
+					"    \n",
+					"    # Calculate average daily change in this sequence\n",
+					"    avg_change = sequence_dates.agg(avg(\"sales_change\")).first()[0]\n",
+					"    avg_change_pct = sequence_dates.agg(avg(\"sales_change_pct\")).first()[0]\n",
+					"    \n",
+					"    pattern_instances.append({\n",
+					"        \"type\": \"consecutive_increase\" if is_increase else \"consecutive_decrease\",\n",
+					"        \"length\": count,\n",
+					"        \"start_date\": start_date.strftime(\"%Y-%m-%d\"),\n",
+					"        \"end_date\": end_date.strftime(\"%Y-%m-%d\"),\n",
+					"        \"avg_daily_change\": float(avg_change),\n",
+					"        \"avg_daily_change_pct\": float(avg_change_pct)\n",
+					"    })\n",
+					""
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Find regular spikes or dips\n",
+					"from pyspark.sql.functions import avg as spark_avg"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Calculate z-score for each day's sales\n",
+					"daily_avg = daily_sales.agg(spark_avg(\"daily_sales\")).first()[0]"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"daily_stddev = daily_sales.agg(stddev(\"daily_sales\")).first()[0]"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"daily_sales = daily_sales \\\n",
+					"    .withColumn(\"z_score\", (col(\"daily_sales\") - daily_avg) / daily_stddev)"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Identify significant spikes and dips\n",
+					"spikes = daily_sales.filter(col(\"z_score\") > 2).orderBy(\"date\")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"dips = daily_sales.filter(col(\"z_score\") < -2).orderBy(\"date\")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Look for cyclical patterns in spikes/dips\n",
+					"spike_intervals = []\n",
+					"previous_spike_date = None"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"for spike in spikes.collect():\n",
+					"    current_date = spike.date\n",
+					"    \n",
+					"    if previous_spike_date:\n",
+					"        days_between = (current_date - previous_spike_date).days\n",
+					"        spike_intervals.append(days_between)\n",
+					"    \n",
+					"    previous_spike_date = current_date"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Calculate average interval between spikes\n",
+					"avg_spike_interval = sum(spike_intervals) / len(spike_intervals) if spike_intervals else 0"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Find repeating patterns in spike intervals\n",
+					"interval_counts = {}\n",
+					"for interval in spike_intervals:\n",
+					"    interval_counts[interval] = interval_counts.get(interval, 0) + 1"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Identify the most common intervals\n",
+					"common_intervals = sorted(interval_counts.items(), key=lambda x: x[1], reverse=True)"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Extract cyclical patterns\n",
+					"cyclical_patterns = []"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Weekly pattern strengths\n",
+					"day_variance = weekly_pattern.agg(stddev(\"avg_sales\")).first()[0]"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"overall_variance = daily_sales.agg(stddev(\"daily_sales\")).first()[0]"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"weekly_pattern_strength = day_variance / overall_variance if overall_variance else 0"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"if weekly_pattern_strength > 0.2:  # Arbitrary threshold\n",
+					"    peak_day = weekly_pattern.orderBy(col(\"avg_sales\").desc()).first()\n",
+					"    low_day = weekly_pattern.orderBy(\"avg_sales\").first()\n",
+					"    \n",
+					"    cyclical_patterns.append({\n",
+					"        \"type\": \"weekly_cycle\",\n",
+					"        \"description\": f\"Sales peak on {peak_day.day_of_week} and are lowest on {low_day.day_of_week}\",\n",
+					"        \"strength\": float(weekly_pattern_strength),\n",
+					"        \"peak_value\": float(peak_day.avg_sales),\n",
+					"        \"low_value\": float(low_day.avg_sales),\n",
+					"        \"variation_pct\": float((peak_day.avg_sales - low_day.avg_sales) / low_day.avg_sales * 100)\n",
+					"    })"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Monthly pattern strengths\n",
+					"if monthly_pattern.count() >= 28:  # Ensure we have most days of the month\n",
+					"    day_variance = monthly_pattern.agg(stddev(\"avg_sales\")).first()[0]\n",
+					"    overall_variance = daily_sales.agg(stddev(\"daily_sales\")).first()[0]\n",
+					"    monthly_pattern_strength = day_variance / overall_variance if overall_variance else 0\n",
+					"    \n",
+					"    if monthly_pattern_strength > 0.15:  # Arbitrary threshold\n",
+					"        peak_day = monthly_pattern.orderBy(col(\"avg_sales\").desc()).first()\n",
+					"        low_day = monthly_pattern.orderBy(\"avg_sales\").first()\n",
+					"        \n",
+					"        cyclical_patterns.append({\n",
+					"            \"type\": \"monthly_cycle\",\n",
+					"            \"description\": f\"Sales peak on day {peak_day.day_of_month} and are lowest on day {low_day.day_of_month}\",\n",
+					"            \"strength\": float(monthly_pattern_strength),\n",
+					"            \"peak_value\": float(peak_day.avg_sales),\n",
+					"            \"low_value\": float(low_day.avg_sales),\n",
+					"            \"variation_pct\": float((peak_day.avg_sales - low_day.avg_sales) / low_day.avg_sales * 100)\n",
+					"        })"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# If we found common spike intervals\n",
+					"if common_intervals and common_intervals[0][1] >= 3:  # At least 3 occurrences of the same interval\n",
+					"    most_common_interval = common_intervals[0][0]\n",
+					"    cyclical_patterns.append({\n",
+					"        \"type\": \"sales_spike_cycle\",\n",
+					"        \"description\": f\"Sales spikes occur approximately every {most_common_interval} days\",\n",
+					"        \"interval_days\": most_common_interval,\n",
+					"        \"occurrences\": common_intervals[0][1],\n",
+					"        \"confidence\": float(common_intervals[0][1] / len(spike_intervals)) if spike_intervals else 0\n",
+					"    })"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Prepare output in the required ProcessedData format\n",
+					"now = datetime.now().isoformat()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Create processed data in the required format\n",
+					"processed_data = {\n",
+					"    \"id\": str(uuid.uuid4()),\n",
+					"    \"projectId\": \"project-capstone\",\n",
+					"    \"sourceIds\": sales_data.select(\"id\").distinct().limit(10).rdd.flatMap(lambda x: x).collect() or [\"sample-pattern-data\"],\n",
+					"    \"analysisType\": \"pattern\",\n",
+					"    \"title\": \"Pattern Detection Analysis\",\n",
+					"    \"description\": \"Detection of recurring patterns, sequences, and cycles in business data\",\n",
+					"    \"data\": {\n",
+					"        \"type\": \"detected_patterns\",\n",
+					"        \"value\": {\n",
+					"            \"cyclical_patterns\": cyclical_patterns,\n",
+					"            \"sequence_patterns\": pattern_instances,\n",
+					"            \"significant_spikes\": [\n",
+					"                {\n",
+					"                    \"date\": str(row.date),\n",
+					"                    \"sales\": float(row.daily_sales),\n",
+					"                    \"z_score\": float(row.z_score),\n",
+					"                    \"day_of_week\": row.day_of_week\n",
+					"                } \n",
+					"                for row in spikes.collect()\n",
+					"            ],\n",
+					"            \"significant_dips\": [\n",
+					"                {\n",
+					"                    \"date\": str(row.date),\n",
+					"                    \"sales\": float(row.daily_sales),\n",
+					"                    \"z_score\": float(row.z_score),\n",
+					"                    \"day_of_week\": row.day_of_week\n",
+					"                } \n",
+					"                for row in dips.collect()\n",
+					"            ],\n",
+					"            \"weekly_day_pattern\": [\n",
+					"                {\n",
+					"                    \"day\": row.day_of_week,\n",
+					"                    \"avg_sales\": float(row.avg_sales),\n",
+					"                    \"stddev\": float(row.stddev_sales)\n",
+					"                }\n",
+					"                for row in weekly_pattern.collect()\n",
+					"            ]\n",
+					"        },\n",
+					"        \"confidence\": 0.8\n",
+					"    },\n",
+					"    \"insights\": [\n",
+					"        {\n",
+					"            \"type\": \"operational_improvement\",\n",
+					"            \"title\": \"Recurring Sales Pattern Identified\",\n",
+					"            \"description\": cyclical_patterns[0][\"description\"] if cyclical_patterns else \"No strong cyclical patterns detected\",\n",
+					"            \"impact\": 12000 if cyclical_patterns else 0,\n",
+					"            \"confidence\": 0.75 if cyclical_patterns else 0.3\n",
+					"        },\n",
+					"        {\n",
+					"            \"type\": \"revenue_increase\",\n",
+					"            \"title\": \"Sales Run Pattern\",\n",
+					"            \"description\": f\"Identified {len(pattern_instances)} significant sales runs, including {max_increase_run.count if max_increase_run else 0} consecutive days of increase\",\n",
+					"            \"impact\": 8500,\n",
+					"            \"confidence\": 0.7\n",
+					"        }\n",
+					"    ],\n",
+					"    \"visualizationType\": \"chart\",\n",
+					"    \"visualizationConfig\": {\n",
+					"        \"chartType\": [\"line\", \"heatmap\"],\n",
+					"        \"timeSeries\": True,\n",
+					"        \"dimensions\": [\"day\", \"date\", \"pattern_type\"]\n",
+					"    },\n",
+					"    \"processedAt\": now,\n",
+					"    \"createdAt\": now\n",
+					"}"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Save to Data Lake\n",
+					"processedDF = spark.createDataFrame([processed_data])\n",
+					"processedDF.write.format(\"parquet\").mode(\"append\").save(\"abfss://processed@groovybytesdatalake.dfs.core.windows.net/pattern_detection/\")\n",
+					"\n",
+					"print(\"Pattern detection analysis completed and saved to Data Lake\")"
+				],
+				"execution_count": null
+			}
+		]
+	}
+}

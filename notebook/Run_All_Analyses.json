@@ -1,0 +1,197 @@
+{
+	"name": "Run_All_Analyses",
+	"properties": {
+		"nbformat": 4,
+		"nbformat_minor": 2,
+		"sessionProperties": {
+			"driverMemory": "28g",
+			"driverCores": 4,
+			"executorMemory": "28g",
+			"executorCores": 4,
+			"numExecutors": 2,
+			"conf": {
+				"spark.dynamicAllocation.enabled": "false",
+				"spark.dynamicAllocation.minExecutors": "2",
+				"spark.dynamicAllocation.maxExecutors": "2",
+				"spark.autotune.trackingId": "99af8afd-3e37-4600-9c03-a52c4a4d3c68"
+			}
+		},
+		"metadata": {
+			"saveOutput": true,
+			"enableDebugMode": false,
+			"kernelspec": {
+				"name": "synapse_pyspark",
+				"display_name": "python"
+			},
+			"language_info": {
+				"name": "python"
+			},
+			"sessionKeepAliveTimeout": 30
+		},
+		"cells": [
+			{
+				"cell_type": "code",
+				"source": [
+					"# Import necessary libraries\n",
+					"from pyspark.sql import SparkSession\n",
+					"import os\n",
+					"from datetime import datetime"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Initialize Spark Session with additional memory and executor configurations\n",
+					"spark = SparkSession.builder \\\n",
+					"    .appName(\"GroovyBytes Comprehensive Analysis\") \\\n",
+					"    .config(\"spark.driver.memory\", \"8g\") \\\n",
+					"    .config(\"spark.executor.memory\", \"8g\") \\\n",
+					"    .getOrCreate()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Function to log progress\n",
+					"def log_progress(message):\n",
+					"    print(f\"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Start time for overall process\n",
+					"start_time = datetime.now()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"log_progress(f\"Starting comprehensive analysis run\")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Ensure output directory exists\n",
+					"output_base_path = \"abfss://processed@groovybytesdatalake.dfs.core.windows.net/\""
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Run all analyses in sequence\n",
+					"try:\n",
+					"    # Run Energy Consumption Analysis\n",
+					"    log_progress(\"Starting Energy Consumption Analysis\")\n",
+					"    %run \"./Energy_Consumption_Analysis\"\n",
+					"    log_progress(\"Energy Consumption Analysis completed\")\n",
+					"    \n",
+					"    # Run Inventory Stock Optimization\n",
+					"    log_progress(\"Starting Inventory Stock Optimization\")\n",
+					"    %run \"./Inventory_Stock_Optimization\"\n",
+					"    log_progress(\"Inventory Stock Optimization completed\")\n",
+					"    \n",
+					"    # Run Foot Traffic Analysis\n",
+					"    log_progress(\"Starting Foot Traffic Analysis\")\n",
+					"    %run \"./Foot_Traffic_Analysis\"\n",
+					"    log_progress(\"Foot Traffic Analysis completed\")\n",
+					"    \n",
+					"    # Run Customer Behavior Segmentation\n",
+					"    log_progress(\"Starting Customer Behavior Segmentation\")\n",
+					"    %run \"./Customer_Behavior_Segmentation\"\n",
+					"    log_progress(\"Customer Behavior Segmentation completed\")\n",
+					"    \n",
+					"    # Run Expense Category Analysis\n",
+					"    log_progress(\"Starting Expense Category Analysis\")\n",
+					"    %run \"./Expense_Category_Analysis\"\n",
+					"    log_progress(\"Expense Category Analysis completed\")\n",
+					"    \n",
+					"    # Run Promotional Campaign Effectiveness\n",
+					"    log_progress(\"Starting Promotional Campaign Effectiveness\")\n",
+					"    %run \"./Promotional_Campaign_Effectiveness\"\n",
+					"    log_progress(\"Promotional Campaign Effectiveness completed\")\n",
+					"    \n",
+					"    # Run Sales Forecasting\n",
+					"    log_progress(\"Starting Sales Forecasting\")\n",
+					"    %run \"./Sales_Forecasting\"\n",
+					"    log_progress(\"Sales Forecasting completed\")\n",
+					"    \n",
+					"    # Run Seasonal Trend Analysis\n",
+					"    log_progress(\"Starting Seasonal Trend Analysis\")\n",
+					"    %run \"./Seasonal_Trend_Analysis\"\n",
+					"    log_progress(\"Seasonal Trend Analysis completed\")\n",
+					"    \n",
+					"    # Run Relationship Analysis\n",
+					"    log_progress(\"Starting Relationship Analysis\")\n",
+					"    %run \"./Relationship_Analysis\"\n",
+					"    log_progress(\"Relationship Analysis completed\")\n",
+					"    \n",
+					"    # Run Pattern Detection\n",
+					"    log_progress(\"Starting Pattern Detection\")\n",
+					"    %run \"./Pattern_Detection\"\n",
+					"    log_progress(\"Pattern Detection completed\")\n",
+					"    \n",
+					"except Exception as e:\n",
+					"    log_progress(f\"Error running analyses: {str(e)}\")\n",
+					"    raise e\n",
+					""
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"# Calculate total run time\n",
+					"end_time = datetime.now()"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"\n",
+					"total_time = end_time - start_time\n",
+					"log_progress(f\"All analyses completed in {total_time}\")"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Create summary record of the analysis run\n",
+					"summary = {\n",
+					"    \"run_id\": str(uuid.uuid4()),\n",
+					"    \"start_time\": start_time.isoformat(),\n",
+					"    \"end_time\": end_time.isoformat(),\n",
+					"    \"total_duration_seconds\": total_time.total_seconds(),\n",
+					"    \"analyses_completed\": 10,\n",
+					"    \"run_status\": \"success\"\n",
+					"}"
+				],
+				"execution_count": null
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"# Save summary record\n",
+					"summary_df = spark.createDataFrame([summary])\n",
+					"summary_df.write.format(\"parquet\").mode(\"append\").save(f\"{output_base_path}/analysis_runs/\")\n",
+					"\n",
+					"log_progress(\"Analysis run summary saved\")"
+				],
+				"execution_count": null
+			}
+		]
+	}
+}
